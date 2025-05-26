@@ -1,9 +1,9 @@
 {
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "youtube-tools",
-  "title": "Youtube-Tools",
+  "title": "Youtube Tools",
   "description": "Downloads Yotuube Videos",
-  "icon": "./assets/youtube.png",
+  "icon": "youtube.png",
   "author": "Drs6",
   "categories": [
     "Applications"
@@ -12,10 +12,10 @@
   "commands": [
     {
       "name": "youtube-downloader",
-      "title": "Download YouTube Video",
+      "title": "Download Youtube Video",
       "description": "Download YouTube videos as MP4 or MP3 to your Downloads folder.",
       "mode": "view",
-      "icon": "./assets/youtube.png"
+      "icon": "youtube.png"
     }
   ],
   "dependencies": {

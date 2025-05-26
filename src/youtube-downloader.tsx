@@ -11,7 +11,7 @@ const findCommandPath = async (command: string): Promise<string | null> => {
     // and execa will find it.
     await execa("which", [command]);
     return command; // Return the command name itself, execa will resolve it via PATH
-  } catch (error) {
+  } catch {
     // 'which' failed, try known Homebrew paths
     const knownPaths: string[] = [];
     if (os.arch() === "arm64") {
@@ -24,7 +24,7 @@ const findCommandPath = async (command: string): Promise<string | null> => {
         const testArgs = command === "ffmpeg" ? ["-version"] : ["--version"];
         await execa(p, testArgs);
         return p; // Return the full path
-      } catch (e) {
+      } catch {
         // Continue to next path
       }
     }
@@ -41,7 +41,7 @@ export default function Command() {
   const [isLoading, setIsLoading] = useState(true);
   const [ytDlpPath, setYtDlpPath] = useState<string | null>(null);
   const [ffmpegPath, setFfmpegPath] = useState<string | null>(null);
-  const activeProcessRef = useRef<any | null>(null); // Changed type to any for now
+  const activeProcessRef = useRef<ReturnType<typeof execa> | null>(null);
 
   const downloadsPath = path.join(os.homedir(), "Downloads");
 
@@ -66,10 +66,18 @@ export default function Command() {
       }
 
       if (!foundYtDlpPath) {
-        await showToast(Toast.Style.Failure, "yt-dlp Not Found", "Please install yt-dlp (e.g., brew install yt-dlp) and ensure it's in your PATH or standard Homebrew locations.");
+        await showToast(
+          Toast.Style.Failure,
+          "yt-dlp Not Found",
+          "Please install yt-dlp (e.g., brew install yt-dlp) and ensure it's in your PATH or standard Homebrew locations.",
+        );
       }
       if (!foundFfmpegPath) {
-        await showToast(Toast.Style.Failure, "FFmpeg Not Found", "Please install ffmpeg (e.g., brew install ffmpeg) and ensure it's in your PATH or standard Homebrew locations.");
+        await showToast(
+          Toast.Style.Failure,
+          "FFmpeg Not Found",
+          "Please install ffmpeg (e.g., brew install ffmpeg) and ensure it's in your PATH or standard Homebrew locations.",
+        );
       }
       setIsLoading(false);
     }
@@ -95,7 +103,7 @@ export default function Command() {
   const progressRegex = /\[download\]\s+(?<percentage>\d+\.\d+)%/;
   let toast: Toast; // Declare toast here to be accessible in streamOutput and catch
 
-  const streamOutput = (chunk: any) => {
+  const streamOutput = (chunk: Buffer | string) => {
     const data = chunk.toString();
     fullOutput += data;
     const match = progressRegex.exec(data);
@@ -122,7 +130,7 @@ export default function Command() {
     // Function to handle cancellation
     const cancelDownload = () => {
       if (activeProcessRef.current) {
-        activeProcessRef.current.cancel(); // Gracefully attempt to cancel
+        activeProcessRef.current.kill(); // Use kill instead of cancel
         // Toast update for cancellation is handled in the main catch block via error.isCanceled
       }
     };
@@ -136,7 +144,7 @@ export default function Command() {
         onAction: cancelDownload,
       },
     });
-    
+
     try {
       const args = [];
       const outputTemplate = path.join(downloadsPath, "%(title)s.%(ext)s");
@@ -156,8 +164,8 @@ export default function Command() {
             `best[height<=${height}][ext=mp4]`,
             `best[height<=${height}]`,
             `best[ext=mp4]`,
-            `best`
-          ].join('/');
+            `best`,
+          ].join("/");
         } else {
           // More flexible format selection for best quality
           formatString = [
@@ -166,8 +174,8 @@ export default function Command() {
             `bestvideo+bestaudio[ext=m4a]`,
             `bestvideo+bestaudio`,
             `best[ext=mp4]`,
-            `best`
-          ].join('/');
+            `best`,
+          ].join("/");
         }
         args.push("-f", formatString);
         // Always try to merge to mp4 if possible
@@ -184,15 +192,10 @@ export default function Command() {
             `bestvideo[height<=${height}][ext=mp4]`,
             `bestvideo[height<=${height}]`,
             `best[height<=${height}][ext=mp4]`,
-            `best[height<=${height}]`
-          ].join('/');
+            `best[height<=${height}]`,
+          ].join("/");
         } else {
-          formatString = [
-            `bestvideo[ext=mp4]`,
-            `bestvideo`,
-            `best[ext=mp4]`,
-            `best`
-          ].join('/');
+          formatString = [`bestvideo[ext=mp4]`, `bestvideo`, `best[ext=mp4]`, `best`].join("/");
         }
         args.push("-f", formatString);
         args.push("--merge-output-format", "mp4");
@@ -221,7 +224,7 @@ export default function Command() {
       activeProcessRef.current = execa(ytDlpPath, args, { timeout: 900000 });
       activeProcessRef.current.stdout?.on("data", streamOutput);
       activeProcessRef.current.stderr?.on("data", streamOutput);
-      
+
       await activeProcessRef.current;
       activeProcessRef.current = null; // Clear after successful completion
 
@@ -232,76 +235,89 @@ export default function Command() {
       if (destMatch && destMatch[1]) {
         downloadedFileName = path.basename(destMatch[1].trim());
       } else {
-        const titleMatch = fullOutput.match(/\[info\] (.*?)\[/s); 
+        const titleMatch = fullOutput.match(/\[info\] (.*?)\[/s);
         if (titleMatch && titleMatch[1]) {
-          downloadedFileName = titleMatch[1].trim().split('\n')[0] + "." + finalExtension;
+          downloadedFileName = titleMatch[1].trim().split("\n")[0] + "." + finalExtension;
         } else {
           downloadedFileName = "Downloaded_File." + finalExtension;
         }
       }
       toast.message = `${downloadedFileName} saved to Downloads.`;
       toast.primaryAction = undefined; // Remove cancel action on success
-      
-      await new Promise(resolve => setTimeout(resolve, 300)); 
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
       await closeMainWindow({ popToRootType: PopToRootType.Immediate });
-    } catch (error: any) {
-      if (!error.isCanceled) { // Don't log an error if it was a user cancellation
+    } catch (error: unknown) {
+      const err = error as {
+        isCanceled?: boolean;
+        code?: string;
+        command?: string;
+        isTimeout?: boolean;
+        durationMs?: number;
+        stderr?: string;
+        stdout?: string;
+        shortMessage?: string;
+        message?: string;
+      };
+      if (!err.isCanceled) {
+        // Don't log an error if it was a user cancellation
         console.error("Download error:", error);
       }
       activeProcessRef.current = null; // Clear on error/cancellation
       if (toast) {
-        toast.style = error.isCanceled ? Toast.Style.Success : Toast.Style.Failure; // Or .Default for cancelled
-        toast.title = error.isCanceled ? "Download Cancelled" : "Download Failed";
+        toast.style = err.isCanceled ? Toast.Style.Success : Toast.Style.Failure; // Or .Default for cancelled
+        toast.title = err.isCanceled ? "Download Cancelled" : "Download Failed";
         let userMessage = "Failed to download video.";
-        let errorDetailsForClipboard = `Error: ${error.message || "Unknown error"}`;
-        if (fullOutput && !error.isCanceled) { // Don't include full output for cancellation message
+        let errorDetailsForClipboard = `Error: ${err.message || "Unknown error"}`;
+        if (fullOutput && !err.isCanceled) {
+          // Don't include full output for cancellation message
           errorDetailsForClipboard += `\n\nOutput:\n${fullOutput}`;
         }
 
-        if (error.isCanceled) { 
-            userMessage = "Download was cancelled by the user.";
-            errorDetailsForClipboard = userMessage; 
-        } else if (error.code === 'ENOENT') {
-            userMessage = `Failed to execute ${error.command?.split(' ')[0]}. Path: ${ytDlpPath}`;
-            errorDetailsForClipboard = `ENOENT: Command not found. Tried to run '${error.command?.split(' ')[0]}' at path '${ytDlpPath}'. Ensure it is correctly installed and accessible.`;
-        } else if (error.isTimeout) {
-            userMessage = "Download timed out.";
-            errorDetailsForClipboard = `Timeout: The command '${error.command}' timed out after ${error.durationMs}ms.`;
-        } else if (fullOutput || error.stderr || error.stdout) {
-          const out = fullOutput || error.stderr || error.stdout;
-          if (out.includes("Unsupported URL")) userMessage = "Unsupported URL.";
-          else if (out.includes("Video unavailable")) userMessage = "Video unavailable.";
-          else if (out.includes("Requested format is not available")) {
+        if (err.isCanceled) {
+          userMessage = "Download was cancelled by the user.";
+          errorDetailsForClipboard = userMessage;
+        } else if (err.code === "ENOENT") {
+          userMessage = `Failed to execute ${err.command?.split(" ")[0]}. Path: ${ytDlpPath}`;
+          errorDetailsForClipboard = `ENOENT: Command not found. Tried to run '${err.command?.split(" ")[0]}' at path '${ytDlpPath}'. Ensure it is correctly installed and accessible.`;
+        } else if (err.isTimeout) {
+          userMessage = "Download timed out.";
+          errorDetailsForClipboard = `Timeout: The command '${err.command}' timed out after ${err.durationMs}ms.`;
+        } else if (fullOutput || err.stderr || err.stdout) {
+          const out = fullOutput || err.stderr || err.stdout;
+          if (out && out.includes("Unsupported URL")) userMessage = "Unsupported URL.";
+          else if (out && out.includes("Video unavailable")) userMessage = "Video unavailable.";
+          else if (out && out.includes("Requested format is not available")) {
             userMessage = "Video format not available. Try a different quality setting.";
-          } else if (out.includes("nsig extraction failed")) {
+          } else if (out && out.includes("nsig extraction failed")) {
             userMessage = "YouTube playback issue detected. The video was likely still downloaded successfully.";
-          } else if (out.includes("Some formats may be missing")) {
+          } else if (out && out.includes("Some formats may be missing")) {
             userMessage = "Some video qualities unavailable, but download should still work.";
-          } else if (out.includes("HTTP Error 403")) {
+          } else if (out && out.includes("HTTP Error 403")) {
             userMessage = "Access denied by YouTube. Try again in a few minutes.";
-          } else if (out.includes("Private video")) {
+          } else if (out && out.includes("Private video")) {
             userMessage = "This video is private and cannot be downloaded.";
-          } else if (out.includes("This live event has ended")) {
+          } else if (out && out.includes("This live event has ended")) {
             userMessage = "This live stream has ended and may not be available for download.";
-          } else {
-            const errorLine = out.split('\n').find((l: string) => l.toLowerCase().startsWith("error:"));
+          } else if (out) {
+            const errorLine = out.split("\n").find((l: string) => l.toLowerCase().startsWith("error:"));
             userMessage = errorLine || "An error occurred. Check console.";
           }
-        } else if (error.shortMessage) {
-            userMessage = error.shortMessage;
+        } else if (err.shortMessage) {
+          userMessage = err.shortMessage;
         }
         toast.message = userMessage.substring(0, 250);
-        
-        if (error.isCanceled) {
-            toast.primaryAction = undefined; // No actions if cancelled by user
+
+        if (err.isCanceled) {
+          toast.primaryAction = undefined; // No actions if cancelled by user
         } else {
-            toast.primaryAction = {
-                title: "Copy Error Details",
-                onAction: async () => {
-                    await Clipboard.copy(errorDetailsForClipboard);
-                    await showToast(Toast.Style.Success, "Error details copied to clipboard.");
-                },
-            };
+          toast.primaryAction = {
+            title: "Copy Error Details",
+            onAction: async () => {
+              await Clipboard.copy(errorDetailsForClipboard);
+              await showToast(Toast.Style.Success, "Error details copied to clipboard.");
+            },
+          };
         }
       }
     } finally {
@@ -312,7 +328,18 @@ export default function Command() {
   if (isLoading && (!ytDlpPath || !ffmpegPath)) return <Form isLoading={true} />;
   if (!ytDlpPath || !ffmpegPath) {
     return (
-      <Form actions={<ActionPanel>{!ytDlpPath && <Action.OpenInBrowser title="Install yt-dlp" url="https://formulae.brew.sh/formula/yt-dlp" />}{!ffmpegPath && <Action.OpenInBrowser title="Install ffmpeg" url="https://formulae.brew.sh/formula/ffmpeg" />}</ActionPanel>}>
+      <Form
+        actions={
+          <ActionPanel>
+            {!ytDlpPath && (
+              <Action.OpenInBrowser title="Install Yt-Dlp" url="https://formulae.brew.sh/formula/yt-dlp" />
+            )}
+            {!ffmpegPath && (
+              <Action.OpenInBrowser title="Install Ffmpeg" url="https://formulae.brew.sh/formula/ffmpeg" />
+            )}
+          </ActionPanel>
+        }
+      >
         <Form.Description text="⚠️ Prerequisites Missing" />
         {!ytDlpPath && <Form.Description text="• yt-dlp not found. Install and restart." />}
         {!ffmpegPath && <Form.Description text="• ffmpeg not found. Install and restart." />}
@@ -321,8 +348,23 @@ export default function Command() {
   }
 
   return (
-    <Form isLoading={isLoading} actions={<ActionPanel><Action.SubmitForm title="Download Video" onSubmit={handleSubmit} /></ActionPanel>}>
-      <Form.TextField id="url" title="YouTube URL" placeholder="e.g., https://www.youtube.com/watch?v=dQw4w9WgXcQ" value={url} error={urlError} onChange={setUrl} onBlur={(e) => validateUrl(e.target.value || "")} />
+    <Form
+      isLoading={isLoading}
+      actions={
+        <ActionPanel>
+          <Action.SubmitForm title="Download Video" onSubmit={handleSubmit} />
+        </ActionPanel>
+      }
+    >
+      <Form.TextField
+        id="url"
+        title="YouTube URL"
+        placeholder="e.g., https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        value={url}
+        error={urlError}
+        onChange={setUrl}
+        onBlur={(e) => validateUrl(e.target.value || "")}
+      />
       <Form.Dropdown id="downloadType" title="Download Type" value={downloadType} onChange={setDownloadType}>
         <Form.Dropdown.Item value="mp4_video_audio" title="MP4 (Video + Audio)" />
         <Form.Dropdown.Item value="mp4_video_only" title="MP4 (Video Only)" />
@@ -350,4 +392,4 @@ export default function Command() {
       {isLoading && <Form.Description text="Download in progress... this may take a few moments." />}
     </Form>
   );
-} 
+}
