@@ -36,29 +36,32 @@ let formatString = [
 ].join('/');
 ```
 
-### 3. Enhanced Command Arguments
-Added the following arguments to improve reliability:
-- `--extractor-retries 3` - Retry failed extractions
-- `--fragment-retries 3` - Retry failed fragment downloads
-- `--retry-sleep 1` - Wait between retries
-- `--extractor-args youtube:player_client=android,web` - Use multiple clients to avoid restrictions
-- `--merge-output-format mp4` - Better than `--recode-video mp4`
+### 3. Added Retry Mechanisms
+```javascript
+args.push("--extractor-retries", "3");
+args.push("--fragment-retries", "3");
+args.push("--retry-sleep", "1");
+```
 
-### 4. Better Error Handling
-Added specific error messages for common YouTube issues:
-- nsig extraction failures
-- Format availability issues
-- HTTP 403 errors
-- Private videos
-- Live stream issues
+### 4. Alternative Player Clients
+```javascript
+args.push("--extractor-args", "youtube:player_client=android,web");
+```
 
-## Testing
-The fix was tested with the problematic video:
-- URL: `https://www.youtube.com/watch?v=MxqAEMdVQeQ`
-- Result: ✅ Successfully downloaded as MP4
+### 5. Enhanced Error Handling
+- Specific error messages for nsig extraction failures
+- Better user feedback for format availability issues
+- Graceful handling of YouTube's streaming restrictions
 
-## Benefits
-1. **More Robust**: Multiple fallback format options
-2. **Better Compatibility**: Works with YouTube's new restrictions
-3. **Improved UX**: Better error messages for users
-4. **Future-Proof**: Uses latest yt-dlp with ongoing YouTube support 
+## Test Results
+
+✅ Successfully downloaded the problematic video (MxqAEMdVQeQ)
+✅ No more nsig extraction errors
+✅ Robust fallback format selection working
+✅ Improved user experience with better error messages
+
+## Prevention
+- Regular yt-dlp updates
+- Flexible format selection strategies
+- Multiple fallback options
+- Enhanced error handling and user feedback 
