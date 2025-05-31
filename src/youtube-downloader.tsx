@@ -37,6 +37,16 @@ export default function Command() {
   const [downloadType, setDownloadType] = useState("mp4_video_audio");
   const [videoQuality, setVideoQuality] = useState("best");
   const [mp3Quality, setMp3Quality] = useState("5");
+  const [compressionLevel, setCompressionLevel] = useState("none");
+  const [compressionCrf, setCompressionCrf] = useState("23");
+  const [outputPath, setOutputPath] = useState(path.join(os.homedir(), "Downloads"));
+  const [estimatedSize, setEstimatedSize] = useState<string>("");
+  const [videoInfo, setVideoInfo] = useState<{
+    duration?: number;
+    title?: string;
+    filesize?: number;
+  } | null>(null);
+  const [selectedPreset, setSelectedPreset] = useState<string>("custom");
   const [urlError, setUrlError] = useState<string | undefined>();
   const [isLoading, setIsLoading] = useState(true);
   const [ytDlpPath, setYtDlpPath] = useState<string | null>(null);
@@ -47,6 +57,64 @@ export default function Command() {
 
   // Regex for basic YouTube URL validation (used for clipboard check)
   const basicYoutubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)/i;
+
+  // Preset configurations
+  const presets = {
+    "high-quality": {
+      name: "🎬 High Quality",
+      description: "4K/2K with light compression - Best for viewing",
+      downloadType: "mp4_video_audio",
+      videoQuality: "best",
+      compressionLevel: "light",
+      compressionCrf: "20",
+      mp3Quality: "0",
+    },
+    "mobile-friendly": {
+      name: "📱 Mobile Friendly",
+      description: "720p with high compression - Great for phones",
+      downloadType: "mp4_video_audio",
+      videoQuality: "720p",
+      compressionLevel: "high",
+      compressionCrf: "28",
+      mp3Quality: "5",
+    },
+    "storage-saver": {
+      name: "💾 Storage Saver",
+      description: "480p with maximum compression - Minimal space",
+      downloadType: "mp4_video_audio",
+      videoQuality: "480p",
+      compressionLevel: "high",
+      compressionCrf: "30",
+      mp3Quality: "5",
+    },
+    "audio-only": {
+      name: "🎵 Audio Only",
+      description: "High quality MP3 - Just the sound",
+      downloadType: "mp3_audio",
+      videoQuality: "best",
+      compressionLevel: "none",
+      compressionCrf: "23",
+      mp3Quality: "0",
+    },
+    balanced: {
+      name: "⚖️ Balanced",
+      description: "1080p with medium compression - Good all-around",
+      downloadType: "mp4_video_audio",
+      videoQuality: "1080p",
+      compressionLevel: "medium",
+      compressionCrf: "23",
+      mp3Quality: "2",
+    },
+    custom: {
+      name: "🔧 Custom",
+      description: "Manual settings",
+      downloadType: "mp4_video_audio",
+      videoQuality: "best",
+      compressionLevel: "none",
+      compressionCrf: "23",
+      mp3Quality: "5",
+    },
+  };
 
   useEffect(() => {
     async function initialize() {
@@ -84,6 +152,58 @@ export default function Command() {
     initialize();
   }, []);
 
+  // Update file size estimation when relevant parameters change
+  useEffect(() => {
+    if (url && ytDlpPath && validateUrl(url)) {
+      getVideoInfoAndEstimate(url);
+    }
+  }, [url, downloadType, videoQuality, compressionLevel, compressionCrf, mp3Quality, ytDlpPath]);
+
+  // Apply preset configuration
+  const applyPreset = (presetKey: string) => {
+    if (presetKey === "custom") {
+      setSelectedPreset("custom");
+      return;
+    }
+
+    const preset = presets[presetKey as keyof typeof presets];
+    if (preset) {
+      setSelectedPreset(presetKey);
+      setDownloadType(preset.downloadType);
+      setVideoQuality(preset.videoQuality);
+      setCompressionLevel(preset.compressionLevel);
+      setCompressionCrf(preset.compressionCrf);
+      setMp3Quality(preset.mp3Quality);
+    }
+  };
+
+  // Detect if current settings match a preset
+  useEffect(() => {
+    const currentSettings = {
+      downloadType,
+      videoQuality,
+      compressionLevel,
+      compressionCrf,
+      mp3Quality,
+    };
+
+    for (const [key, preset] of Object.entries(presets)) {
+      if (key === "custom") continue;
+
+      if (
+        preset.downloadType === currentSettings.downloadType &&
+        preset.videoQuality === currentSettings.videoQuality &&
+        preset.compressionLevel === currentSettings.compressionLevel &&
+        preset.compressionCrf === currentSettings.compressionCrf &&
+        preset.mp3Quality === currentSettings.mp3Quality
+      ) {
+        setSelectedPreset(key);
+        return;
+      }
+    }
+    setSelectedPreset("custom");
+  }, [downloadType, videoQuality, compressionLevel, compressionCrf, mp3Quality]);
+
   const validateUrl = (value: string): boolean => {
     if (!value) {
       setUrlError("URL cannot be empty. Please enter a YouTube video URL.");
@@ -99,20 +219,202 @@ export default function Command() {
     return true;
   };
 
+  // Function to get video info and estimate file size
+  const getVideoInfoAndEstimate = async (videoUrl: string) => {
+    if (!ytDlpPath || !videoUrl || !validateUrl(videoUrl)) {
+      setVideoInfo(null);
+      setEstimatedSize("");
+      return;
+    }
+
+    try {
+      const infoArgs = [videoUrl, "--dump-json", "--no-playlist"];
+      const result = await execa(ytDlpPath, infoArgs, { timeout: 30000 });
+      const info = JSON.parse(result.stdout);
+      setVideoInfo(info);
+
+      // Calculate estimated file size
+      const duration = info.duration || 0; // in seconds
+      let estimatedMB = 0;
+
+      if (downloadType === "mp4_video_audio" || downloadType === "mp4_video_only") {
+        // Video bitrate estimation based on quality
+        let videoBitrate = 0; // kbps
+        if (videoQuality === "best" || videoQuality === "2160p") {
+          videoBitrate = 8000; // 4K typically ~8Mbps
+        } else if (videoQuality === "1440p") {
+          videoBitrate = 4000; // 2K typically ~4Mbps
+        } else if (videoQuality === "1080p") {
+          videoBitrate = 2000; // 1080p typically ~2Mbps
+        } else if (videoQuality === "720p") {
+          videoBitrate = 1000; // 720p typically ~1Mbps
+        } else if (videoQuality === "480p") {
+          videoBitrate = 500; // 480p typically ~500kbps
+        }
+
+        // Apply compression factor
+        if (compressionLevel !== "none") {
+          let compressionFactor = 1;
+          switch (compressionLevel) {
+            case "light":
+              compressionFactor = 0.8; // 20% reduction
+              break;
+            case "medium":
+              compressionFactor = 0.6; // 40% reduction
+              break;
+            case "high":
+              compressionFactor = 0.4; // 60% reduction
+              break;
+            case "custom": {
+              const crf = parseInt(compressionCrf);
+              // CRF to compression factor approximation
+              compressionFactor = Math.max(0.3, 1 - (crf - 18) * 0.04);
+              break;
+            }
+          }
+          videoBitrate *= compressionFactor;
+        }
+
+        estimatedMB = (videoBitrate * duration) / (8 * 1024); // Convert kbps to MB
+
+        // Add audio size for video+audio
+        if (downloadType === "mp4_video_audio") {
+          const audioBitrate = compressionLevel !== "none" ? 128 : 256; // kbps
+          estimatedMB += (audioBitrate * duration) / (8 * 1024);
+        }
+      } else if (downloadType === "mp3_audio") {
+        // MP3 audio estimation
+        let audioBitrate = 128; // default
+        switch (mp3Quality) {
+          case "0":
+            audioBitrate = 245;
+            break;
+          case "2":
+            audioBitrate = 190;
+            break;
+          case "5":
+            audioBitrate = 130;
+            break;
+          case "320K":
+            audioBitrate = 320;
+            break;
+        }
+        estimatedMB = (audioBitrate * duration) / (8 * 1024);
+      } else if (downloadType === "m4a_audio") {
+        // M4A typically ~256kbps
+        estimatedMB = (256 * duration) / (8 * 1024);
+      }
+
+      // Format the estimated size
+      if (estimatedMB < 1) {
+        setEstimatedSize(`~${Math.round(estimatedMB * 1024)} KB`);
+      } else if (estimatedMB < 1024) {
+        setEstimatedSize(`~${Math.round(estimatedMB)} MB`);
+      } else {
+        setEstimatedSize(`~${(estimatedMB / 1024).toFixed(1)} GB`);
+      }
+    } catch (error) {
+      console.error("Error getting video info:", error);
+      setVideoInfo(null);
+      setEstimatedSize("");
+    }
+  };
+
   let fullOutput = "";
   const progressRegex = /\[download\]\s+(?<percentage>\d+\.\d+)%/;
-  let toast: Toast; // Declare toast here to be accessible in streamOutput and catch
+  const sizeRegex = /\[download\]\s+(?<downloaded>[\d.]+\w+)\s+of\s+(?<total>[\d.]+\w+)\s+at\s+(?<speed>[\d.]+\w+\/s)/;
+  let toast: Toast;
+
+  const parseSize = (sizeStr: string): number => {
+    const match = sizeStr.match(/([\d.]+)(\w+)/);
+    if (!match) return 0;
+
+    const value = parseFloat(match[1]);
+    const unit = match[2].toLowerCase();
+
+    switch (unit) {
+      case "kb":
+      case "kib":
+        return value / 1024;
+      case "mb":
+      case "mib":
+        return value;
+      case "gb":
+      case "gib":
+        return value * 1024;
+      default:
+        return value / 1024 / 1024; // assume bytes
+    }
+  };
+
+  const parseSpeed = (speedStr: string): number => {
+    const match = speedStr.match(/([\d.]+)(\w+)\/s/);
+    if (!match) return 0;
+
+    const value = parseFloat(match[1]);
+    const unit = match[2].toLowerCase();
+
+    switch (unit) {
+      case "kb":
+      case "kib":
+        return value / 1024;
+      case "mb":
+      case "mib":
+        return value;
+      case "gb":
+      case "gib":
+        return value * 1024;
+      default:
+        return value / 1024 / 1024; // assume bytes
+    }
+  };
 
   const streamOutput = (chunk: Buffer | string) => {
     const data = chunk.toString();
     fullOutput += data;
-    const match = progressRegex.exec(data);
-    if (match && match.groups?.percentage) {
-      const percentage = parseFloat(match.groups.percentage);
+
+    const progressMatch = progressRegex.exec(data);
+    const sizeMatch = sizeRegex.exec(data);
+
+    if (progressMatch && progressMatch.groups?.percentage) {
+      const percentage = parseFloat(progressMatch.groups.percentage);
+
+      // Extract size and speed information if available
+      let downloadedMB = 0;
+      let totalMB = 0;
+      let speedMBps = 0;
+      let etaSeconds = 0;
+
+      if (sizeMatch && sizeMatch.groups) {
+        downloadedMB = parseSize(sizeMatch.groups.downloaded);
+        totalMB = parseSize(sizeMatch.groups.total);
+        speedMBps = parseSpeed(sizeMatch.groups.speed);
+
+        // Calculate ETA
+        const remainingMB = totalMB - downloadedMB;
+        etaSeconds = speedMBps > 0 ? remainingMB / speedMBps : 0;
+      }
+
+      // Update progress state
       if (toast) {
-        toast.message = `Downloading... ${percentage.toFixed(1)}%`;
-        // The primaryAction for cancellation is set when the toast is created
-        // and cleared on completion/failure.
+        let progressMsg = `Downloading... ${percentage.toFixed(1)}%`;
+
+        if (speedMBps > 0) {
+          progressMsg += ` | ${speedMBps.toFixed(1)} MB/s`;
+        }
+
+        if (etaSeconds > 0 && etaSeconds < 3600) {
+          // Only show ETA if less than 1 hour
+          const minutes = Math.floor(etaSeconds / 60);
+          const seconds = Math.floor(etaSeconds % 60);
+          progressMsg += ` | ETA ${minutes}:${seconds.toString().padStart(2, "0")}`;
+        }
+
+        if (downloadedMB > 0 && totalMB > 0) {
+          progressMsg += ` | ${downloadedMB.toFixed(1)}/${totalMB.toFixed(1)} MB`;
+        }
+
+        toast.message = progressMsg;
       }
     }
   };
@@ -147,7 +449,7 @@ export default function Command() {
 
     try {
       const args = [];
-      const outputTemplate = path.join(downloadsPath, "%(title)s.%(ext)s");
+      const outputTemplate = path.join(outputPath, "%(title)s.%(ext)s");
       let finalExtension = "";
 
       if (downloadType === "mp4_video_audio") {
@@ -183,6 +485,26 @@ export default function Command() {
         if (ffmpegPath && ffmpegPath !== "ffmpeg") {
           args.push("--ffmpeg-location", ffmpegPath);
         }
+
+        // Add compression settings for video+audio
+        if (compressionLevel !== "none") {
+          let crfValue = "23"; // default
+          switch (compressionLevel) {
+            case "light":
+              crfValue = "20";
+              break;
+            case "medium":
+              crfValue = "23";
+              break;
+            case "high":
+              crfValue = "28";
+              break;
+            case "custom":
+              crfValue = compressionCrf;
+              break;
+          }
+          args.push("--postprocessor-args", `ffmpeg:-c:v libx264 -crf ${crfValue} -c:a aac -b:a 128k`);
+        }
       } else if (downloadType === "mp4_video_only") {
         finalExtension = "mp4";
         let formatString;
@@ -201,6 +523,26 @@ export default function Command() {
         args.push("--merge-output-format", "mp4");
         if (ffmpegPath && ffmpegPath !== "ffmpeg") {
           args.push("--ffmpeg-location", ffmpegPath);
+        }
+
+        // Add compression settings for video only
+        if (compressionLevel !== "none") {
+          let crfValue = "23"; // default
+          switch (compressionLevel) {
+            case "light":
+              crfValue = "20";
+              break;
+            case "medium":
+              crfValue = "23";
+              break;
+            case "high":
+              crfValue = "28";
+              break;
+            case "custom":
+              crfValue = compressionCrf;
+              break;
+          }
+          args.push("--postprocessor-args", `ffmpeg:-c:v libx264 -crf ${crfValue}`);
         }
       } else if (downloadType === "mp3_audio") {
         finalExtension = "mp3";
@@ -242,7 +584,7 @@ export default function Command() {
           downloadedFileName = "Downloaded_File." + finalExtension;
         }
       }
-      toast.message = `${downloadedFileName} saved to Downloads.`;
+      toast.message = `${downloadedFileName} saved to ${path.basename(outputPath)}.`;
       toast.primaryAction = undefined; // Remove cancel action on success
 
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -353,6 +695,23 @@ export default function Command() {
       actions={
         <ActionPanel>
           <Action.SubmitForm title="Download Video" onSubmit={handleSubmit} />
+          <Action
+            title="Select Output Folder"
+            onAction={async () => {
+              try {
+                const result = await execa("osascript", [
+                  "-e",
+                  'tell application "System Events" to choose folder with prompt "Select download folder:"',
+                ]);
+                const selectedPath = result.stdout.replace("alias ", "").replace(/:/g, "/").replace("Macintosh HD", "");
+                setOutputPath(selectedPath);
+              } catch {
+                // User cancelled or error occurred
+                console.log("Folder selection cancelled");
+              }
+            }}
+          />
+          <Action title="Reset to Downloads Folder" onAction={() => setOutputPath(downloadsPath)} />
         </ActionPanel>
       }
     >
@@ -365,6 +724,14 @@ export default function Command() {
         onChange={setUrl}
         onBlur={(e) => validateUrl(e.target.value || "")}
       />
+      <Form.Dropdown id="preset" title="Quick Presets" value={selectedPreset} onChange={applyPreset}>
+        {Object.entries(presets).map(([key, preset]) => (
+          <Form.Dropdown.Item key={key} value={key} title={preset.name} />
+        ))}
+      </Form.Dropdown>
+      {selectedPreset !== "custom" && (
+        <Form.Description text={`${presets[selectedPreset as keyof typeof presets].description}`} />
+      )}
       <Form.Dropdown id="downloadType" title="Download Type" value={downloadType} onChange={setDownloadType}>
         <Form.Dropdown.Item value="mp4_video_audio" title="MP4 (Video + Audio)" />
         <Form.Dropdown.Item value="mp4_video_only" title="MP4 (Video Only)" />
@@ -374,9 +741,40 @@ export default function Command() {
       {(downloadType === "mp4_video_audio" || downloadType === "mp4_video_only") && (
         <Form.Dropdown id="videoQuality" title="Video Quality" value={videoQuality} onChange={setVideoQuality}>
           <Form.Dropdown.Item value="best" title="Best Available" />
-          <Form.Dropdown.Item value="1080p" title="1080p" />
-          <Form.Dropdown.Item value="720p" title="720p" />
-          <Form.Dropdown.Item value="480p" title="480p" />
+          <Form.Dropdown.Item value="2160p" title="2160p (4K)" />
+          <Form.Dropdown.Item value="1440p" title="1440p (2K)" />
+          <Form.Dropdown.Item value="1080p" title="1080p (Full HD)" />
+          <Form.Dropdown.Item value="720p" title="720p (HD)" />
+          <Form.Dropdown.Item value="480p" title="480p (SD)" />
+        </Form.Dropdown>
+      )}
+      {(downloadType === "mp4_video_audio" || downloadType === "mp4_video_only") && (
+        <Form.Dropdown
+          id="compressionLevel"
+          title="Compression Level"
+          value={compressionLevel}
+          onChange={setCompressionLevel}
+        >
+          <Form.Dropdown.Item value="none" title="No Compression (Original)" />
+          <Form.Dropdown.Item value="light" title="Light Compression (High Quality)" />
+          <Form.Dropdown.Item value="medium" title="Medium Compression (Balanced)" />
+          <Form.Dropdown.Item value="high" title="High Compression (Smaller Files)" />
+          <Form.Dropdown.Item value="custom" title="Custom CRF Value" />
+        </Form.Dropdown>
+      )}
+      {(downloadType === "mp4_video_audio" || downloadType === "mp4_video_only") && compressionLevel === "custom" && (
+        <Form.Dropdown
+          id="compressionCrf"
+          title="CRF Value (Lower = Better Quality)"
+          value={compressionCrf}
+          onChange={setCompressionCrf}
+        >
+          <Form.Dropdown.Item value="18" title="18 (Visually Lossless)" />
+          <Form.Dropdown.Item value="20" title="20 (Excellent Quality)" />
+          <Form.Dropdown.Item value="23" title="23 (High Quality - Default)" />
+          <Form.Dropdown.Item value="25" title="25 (Good Quality)" />
+          <Form.Dropdown.Item value="28" title="28 (Medium Quality)" />
+          <Form.Dropdown.Item value="30" title="30 (Lower Quality)" />
         </Form.Dropdown>
       )}
       {downloadType === "mp3_audio" && (
@@ -388,7 +786,27 @@ export default function Command() {
         </Form.Dropdown>
       )}
       <Form.Separator />
-      <Form.Description text={`Files will be saved to: ${downloadsPath}`} />
+      <Form.TextField
+        id="outputPath"
+        title="Output Folder"
+        placeholder="e.g., /Users/username/Downloads"
+        value={outputPath}
+        onChange={setOutputPath}
+      />
+      {estimatedSize && <Form.Description text={`📊 Estimated file size: ${estimatedSize}`} />}
+      {videoInfo && videoInfo.duration && (
+        <Form.Description
+          text={`🎬 Duration: ${Math.floor(videoInfo.duration / 60)}:${(videoInfo.duration % 60).toString().padStart(2, "0")} | Title: ${videoInfo.title?.substring(0, 50)}${(videoInfo.title?.length || 0) > 50 ? "..." : ""}`}
+        />
+      )}
+      <Form.Description text={`Files will be saved to: ${outputPath}`} />
+      {(downloadType === "mp4_video_audio" || downloadType === "mp4_video_only") && compressionLevel !== "none" && (
+        <Form.Description text="💡 Compression will reduce file size but may take longer to process." />
+      )}
+      {(downloadType === "mp4_video_audio" || downloadType === "mp4_video_only") &&
+        (videoQuality === "2160p" || videoQuality === "1440p") && (
+          <Form.Description text="⚠️ High-resolution videos (2K/4K) may not be available for all videos and will result in larger file sizes." />
+        )}
       {isLoading && <Form.Description text="Download in progress... this may take a few moments." />}
     </Form>
   );
